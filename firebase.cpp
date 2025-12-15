@@ -1,7 +1,15 @@
 #include "firebase.h"
 
 firebase::firebase() {
-
+#ifdef QT_WASM_BUILD
+    ref_token = getLocalStorage(prefix + "refreshToken");
+    refresh_refreshToken();
+#else
+    //read keychain here
+#endif
+    connect(this, &firebase::login_succeeded, this, [=]{
+        textList.setStringList(QStringList({"aaa"}));
+    });
 }
 
 #ifdef QT_WASM_BUILD
@@ -15,6 +23,32 @@ QString firebase::getLocalStorage(QString key){
     char* result = emscripten_run_script_string(js.toUtf8().constData());
     return QString(result);
 }
+
+void firebase::refresh_refreshToken(){
+    QUrl url("https://securetoken.googleapis.com/v1/token?key=" + API_key);
+
+    QJsonObject headers;
+    headers["Content-Type"] = "application/json";
+
+    QJsonObject jobj;
+    jobj["grant_type"] = "refresh_token";
+    jobj["refresh_token"] = getLocalStorage(prefix + "refreshToken");
+
+    QNetworkReply *reply = send_request(url, headers, "POST", QJsonDocument(jobj).toJson());
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply]{
+        if(reply->error() != QNetworkReply::NoError){
+            emit login_failed(reply->errorString());
+            return;
+        }
+        QJsonObject jobj = QJsonDocument::fromJson(reply->readAll()).object();
+        idToken   = jobj["id_token"].toString();
+        ref_token = jobj["refresh_token"].toString();
+        setLocalStorage(prefix + "refreshToken", jobj["refresh_token"].toString());
+        emit login_succeeded();
+    });
+}
+
 #else
 // read from & write via qt6keychain here
 #endif
@@ -44,7 +78,15 @@ void firebase::login(QString id, QString pass){
             emit login_failed(reply->errorString());
             return;
         }
+        QJsonObject jobj = QJsonDocument::fromJson(reply->readAll()).object();
+        idToken   = jobj["idToken"].toString();
+        ref_token = jobj["refreshToken"].toString();
 
-
+#ifdef QT_WASM_BUILD
+        setLocalStorage(prefix + "refreshToken", ref_token);
+#else
+        //write keychain here
+#endif
+        emit login_succeeded();
     });
 }
